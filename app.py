@@ -1,56 +1,136 @@
-# first, we import the necessary libraries
 
 import streamlit as st
-import numpy as np
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 
-# We create a fixed dataframe
+st.set_page_config(page_title="CAC vs CLTV Analizi (J-Curve)", layout="wide")
 
-# BU DEĞİŞİKLİK YENİ BRUNCH first-step üzerinde yapıldı
+st.title("Net Kârlılık ve Payback Analizi (J-Curve)")
+st.markdown("""
+Bu grafik, yapılan yatırımın (CAC) zamanla nasıl geri döndüğünü gösterir.
+**Kırmızı Bölge:** Yatırım henüz çıkmadı (Zarar).
+**Yeşil Bölge:** Yatırım çıktı ve şirket kâra geçti.
+""")
 
-data = {
-'Time': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-'Cost': [-50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110],
-}
+# --- SIDEBAR ---
+st.sidebar.header("Parametreler")
+cac = st.sidebar.number_input("CAC ($)", min_value=10, value=200, step=10)
+aov = st.sidebar.number_input("AOV ($)", min_value=1, value=50, step=5)
+purchase_freq = st.sidebar.slider("Sıklık (Ayda)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
+profit_margin = st.sidebar.slider("Kâr Marjı (%)", min_value=0.05, max_value=1.0, value=0.20, step=0.05)
+churn_rate = st.sidebar.slider("Churn Oranı (%)", min_value=0.01, max_value=0.50, value=0.05, step=0.01)
 
-df = pd.DataFrame(data)
+# --- HESAPLAMA (1 YILLIK) ---
+# Düzeltme 1: Süre 12 ay (0. ay başlangıç dahil 13 nokta)
+months = list(range(13))
 
-st.title("This app created for MIUUL Data Scientist Bootcamp")
+net_values = []
+current_customers = 1.0
+cumulative_profit = 0
 
-# We use Streamlit's slider feature to create a dynamic chart.  For the x and y axes, we set a range at the min and max points using the dataframe
+for m in months:
+    if m == 0:
+        net_values.append(-cac)
+    else:
+        monthly_profit = (aov * purchase_freq * profit_margin) * current_customers
+        cumulative_profit += monthly_profit
+        net_values.append(cumulative_profit - cac)
+        current_customers = current_customers * (1 - churn_rate)
 
-x_min = st.slider("X Eksen Minimum Değeri", min_value=df['Time'].min(), max_value=df['Time'].max(), value=df['Time'].min())
-x_max = st.slider("X Eksen Maksimum Değeri", min_value=df['Time'].min(), max_value=df['Time'].max(), value=df['Time'].max())
+df = pd.DataFrame({'Ay': months, 'Net Durum': net_values})
 
-y_min = st.slider("Y Eksen Minimum Değeri", min_value=df['Cost'].min(), max_value=df['Cost'].max(), value=df['Cost'].min())
-y_max = st.slider("Y Eksen Maksimum Değeri", min_value=df['Cost'].min(), max_value=df['Cost'].max(), value=df['Cost'].max())
+# --- PAYBACK BULMA ---
+payback_month = next((i for i, val in enumerate(net_values) if val >= 0), None)
 
+# --- RENKLİ J-CURVE GRAFİĞİ ---
+fig = go.Figure()
 
-# Create a dynamic subset DataFrame using the selected x and y ranges:
+# 0 Çizgisi
+fig.add_hline(y=0, line_width=1, line_color="black")
 
-dynamic_df = df[(df['Time'] >= x_min) & (df['Time'] <= x_max) & (df['Cost'] >= y_min) & (df['Cost'] <= y_max)]
+# Düzeltme 2: Renklendirme Mantığı
+# Plotly'de tek çizgiyi iki renk yapmak zordur.
+# Bu yüzden "0'ın altı" ve "0'ın üstü" diye görsel hile yapıyoruz.
 
+# 1. Ana Çizgi (Nötr Renk - Gri)
+fig.add_trace(go.Scatter(
+    x=df['Ay'], y=df['Net Durum'],
+    mode='lines+markers',
+    name='Net Akış',
+    line=dict(color='gray', width=2),
+    marker=dict(size=6)
+))
 
-# Create an area chart using a dynamic DataFrame using Plotly Express:
-fig = px.area(dynamic_df,
-            x='Time',
-            y='Cost',
-            title="CAC - CLTV Payback",
+# 2. Kırmızı Dolgu (Zarar Bölgesi)
+# Sadece 0'ın altındaki değerleri çiziyoruz
+fig.add_trace(go.Scatter(
+    x=df['Ay'],
+    y=[val if val <= 0 else 0 for val in df['Net Durum']],  # 0'ın üstündekileri 0'a çek ki taşmasın
+    mode='lines',
+    name='Zarar Bölgesi',
+    line=dict(width=0),  # Çizgisi görünmesin, sadece dolgusu
+    fill='tozeroy',
+    fillcolor='rgba(255, 0, 0, 0.2)',  # Hafif saydam Kırmızı
+    hoverinfo='skip'  # Mouse üzerine gelince bilgi çıkmasın
+))
+
+# 3. Yeşil Dolgu (Kâr Bölgesi)
+# Sadece 0'ın üstündeki değerleri çiziyoruz
+fig.add_trace(go.Scatter(
+    x=df['Ay'],
+    y=[val if val >= 0 else 0 for val in df['Net Durum']],
+    mode='lines',
+    name='Kâr Bölgesi',
+    line=dict(width=0),
+    fill='tozeroy',
+    fillcolor='rgba(0, 200, 0, 0.2)',  # Hafif saydam Yeşil
+    hoverinfo='skip'
+))
+
+# Payback İşaretleyicisi
+if payback_month:
+    fig.add_vline(x=payback_month, line_dash="dash", line_color="green")
+    fig.add_annotation(
+        x=payback_month, y=0,
+        text=f"Payback: {payback_month}. Ay",
+        showarrow=True, arrowhead=2, yshift=20,
+        font=dict(color="green", weight="bold")
+    )
+
+fig.update_layout(
+    title='1 Yıllık Yatırım Geri Dönüş Simülasyonu',
+    xaxis_title='Zaman (Ay)',
+    yaxis_title='Net Durum ($)',
+    showlegend=False
 )
-st.plotly_chart(fig)
 
+st.plotly_chart(fig, use_container_width=True)
 
-# We copy the address of the chart in this url and use it in our application. Of course we don't forget to cite the source.
-st.header("CAC - CLTV Payback Graph")
-st.image("https://images.prismic.io/paddle/b996dd76-f520-4d4d-94e0-c588b2886ebd_CaC_Payback-2.png?auto=compress%2Cformat&fit=max&w=1920")
-st.write("Source: [paddle.com](https://www.paddle.com/resources/customer-acquisition-cost)")
+# --- METRİKLER ---
+st.divider()
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("İlk Yatırım (CAC)", f"${cac}", help="Başlangıç maliyeti")
+
+with col2:
+    if payback_month:
+        st.metric("Amorti Süresi", f"{payback_month} Ay", delta_color="normal")
+    else:
+        st.metric("Amorti Süresi", "Dönüş Yok (12+)", delta_color="off")
+
+with col3:
+    # Düzeltme 3: ROI Göstergesi
+    final_net_value = df.iloc[-1]['Net Durum']
+    roi_percent = (final_net_value / cac) * 100
+
+    # Delta parametresine direkt sayıyı veriyoruz, Streamlit rengi (Kırmızı/Yeşil) kendi ayarlar.
+    st.metric(
+        label="1. Yıl Sonu Net Kâr/Zarar",
+        value=f"${final_net_value:.1f}",
+        delta=f"{final_net_value:.1f}$"  # Burası negatifse Kırmızı Ok, pozitifse Yeşil Ok olur
+    )
 
 if __name__ == "__main__":
-    st.title("CLTV Calculation")
-    st.write("Average Order Value = Total Price / Total Transaction")
-    st.write("Purchase Freq = Total Transaction / Total Number of Customers")
-    st.write("Churn = 1 - Repeat Rate")
-    st.write("Profit Margin = Total Price * 0.10")
-    st.write("Customer Value = Average Order Value * Purchase Freq")
-    st.write("CLTV = (Customer Value / Churn) * Profit Margin")
+    st.caption("Not: Grafik kırmızı alandayken yatırım henüz geri dönmemiştir.")
