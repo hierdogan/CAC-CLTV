@@ -1,136 +1,150 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="CAC vs CLTV Analizi (J-Curve)", layout="wide")
+# --- AYARLAR ---
+# Bu komut her zaman en başta olmalı
+st.set_page_config(page_title="Growth Analiz Platformu", layout="wide")
 
-st.title("Net Kârlılık ve Payback Analizi (J-Curve)")
-st.markdown("""
-Bu grafik, yapılan yatırımın (CAC) zamanla nasıl geri döndüğünü gösterir.
-**Kırmızı Bölge:** Yatırım henüz çıkmadı (Zarar).
-**Yeşil Bölge:** Yatırım çıktı ve şirket kâra geçti.
-""")
 
-# --- SIDEBAR ---
-st.sidebar.header("Parametreler")
-cac = st.sidebar.number_input("CAC ($)", min_value=10, value=200, step=10)
-aov = st.sidebar.number_input("AOV ($)", min_value=1, value=50, step=5)
-purchase_freq = st.sidebar.slider("Sıklık (Ayda)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
-profit_margin = st.sidebar.slider("Kâr Marjı (%)", min_value=0.05, max_value=1.0, value=0.20, step=0.05)
-churn_rate = st.sidebar.slider("Churn Oranı (%)", min_value=0.01, max_value=0.50, value=0.05, step=0.01)
+# --- ORTAK HESAPLAMA MOTORU ---
+# Bu fonksiyonu her iki sayfa da kullanacak. Kod tekrarını önlüyoruz.
+def hesapla_senaryo(cac, aov, purchase_freq, profit_margin, churn_rate):
+    months = list(range(13))  # 1 Yıllık
+    net_values = []
+    current_customers = 1.0
+    cumulative_profit = 0
 
-# --- HESAPLAMA (1 YILLIK) ---
-# Düzeltme 1: Süre 12 ay (0. ay başlangıç dahil 13 nokta)
-months = list(range(13))
+    for m in months:
+        if m == 0:
+            net_values.append(-cac)
+        else:
+            monthly_profit = (aov * purchase_freq * profit_margin) * current_customers
+            cumulative_profit += monthly_profit
+            net_values.append(cumulative_profit - cac)
+            current_customers = current_customers * (1 - churn_rate)
 
-net_values = []
-current_customers = 1.0
-cumulative_profit = 0
+    # Payback ayını bul
+    payback = next((i for i, val in enumerate(net_values) if val >= 0), None)
 
-for m in months:
-    if m == 0:
-        net_values.append(-cac)
-    else:
-        monthly_profit = (aov * purchase_freq * profit_margin) * current_customers
-        cumulative_profit += monthly_profit
-        net_values.append(cumulative_profit - cac)
-        current_customers = current_customers * (1 - churn_rate)
+    # Son durum (ROI hesabı için)
+    final_val = net_values[-1]
+    roi = (final_val / cac) * 100
 
-df = pd.DataFrame({'Ay': months, 'Net Durum': net_values})
+    return months, net_values, payback, final_val, roi
 
-# --- PAYBACK BULMA ---
-payback_month = next((i for i, val in enumerate(net_values) if val >= 0), None)
 
-# --- RENKLİ J-CURVE GRAFİĞİ ---
-fig = go.Figure()
-
-# 0 Çizgisi
-fig.add_hline(y=0, line_width=1, line_color="black")
-
-# Düzeltme 2: Renklendirme Mantığı
-# Plotly'de tek çizgiyi iki renk yapmak zordur.
-# Bu yüzden "0'ın altı" ve "0'ın üstü" diye görsel hile yapıyoruz.
-
-# 1. Ana Çizgi (Nötr Renk - Gri)
-fig.add_trace(go.Scatter(
-    x=df['Ay'], y=df['Net Durum'],
-    mode='lines+markers',
-    name='Net Akış',
-    line=dict(color='gray', width=2),
-    marker=dict(size=6)
-))
-
-# 2. Kırmızı Dolgu (Zarar Bölgesi)
-# Sadece 0'ın altındaki değerleri çiziyoruz
-fig.add_trace(go.Scatter(
-    x=df['Ay'],
-    y=[val if val <= 0 else 0 for val in df['Net Durum']],  # 0'ın üstündekileri 0'a çek ki taşmasın
-    mode='lines',
-    name='Zarar Bölgesi',
-    line=dict(width=0),  # Çizgisi görünmesin, sadece dolgusu
-    fill='tozeroy',
-    fillcolor='rgba(255, 0, 0, 0.2)',  # Hafif saydam Kırmızı
-    hoverinfo='skip'  # Mouse üzerine gelince bilgi çıkmasın
-))
-
-# 3. Yeşil Dolgu (Kâr Bölgesi)
-# Sadece 0'ın üstündeki değerleri çiziyoruz
-fig.add_trace(go.Scatter(
-    x=df['Ay'],
-    y=[val if val >= 0 else 0 for val in df['Net Durum']],
-    mode='lines',
-    name='Kâr Bölgesi',
-    line=dict(width=0),
-    fill='tozeroy',
-    fillcolor='rgba(0, 200, 0, 0.2)',  # Hafif saydam Yeşil
-    hoverinfo='skip'
-))
-
-# Payback İşaretleyicisi
-if payback_month:
-    fig.add_vline(x=payback_month, line_dash="dash", line_color="green")
-    fig.add_annotation(
-        x=payback_month, y=0,
-        text=f"Payback: {payback_month}. Ay",
-        showarrow=True, arrowhead=2, yshift=20,
-        font=dict(color="green", weight="bold")
-    )
-
-fig.update_layout(
-    title='1 Yıllık Yatırım Geri Dönüş Simülasyonu',
-    xaxis_title='Zaman (Ay)',
-    yaxis_title='Net Durum ($)',
-    showlegend=False
+# --- SIDEBAR NAVİGASYON ---
+st.sidebar.title("🚀 Analiz Modülleri")
+page = st.sidebar.radio(
+    "Gitmek istediğiniz sayfayı seçin:",
+    ["Tekli J-Curve Analizi", "A/B Senaryo Kıyaslama"]
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.sidebar.divider()  # Görsel ayraç
 
-# --- METRİKLER ---
-st.divider()
+# ==========================================
+# SAYFA 1: TEKLİ J-CURVE ANALİZİ (Eski Dostumuz)
+# ==========================================
+if page == "Tekli J-Curve Analizi":
+    st.title("Tekli Yatırım Dönüş Analizi (J-Curve)")
+    st.markdown("Bir ürün veya kampanya için yatırımın geri dönüş süresini ve kârlılığını analiz edin.")
 
-col1, col2, col3 = st.columns(3)
+    # Parametreler
+    st.sidebar.header("Parametreler")
+    cac = st.sidebar.number_input("CAC ($)", 10, 500, 200, 10, key="s1_cac")
+    aov = st.sidebar.number_input("AOV ($)", 1, 200, 50, 5, key="s1_aov")
+    freq = st.sidebar.slider("Sıklık (Ayda)", 0.1, 5.0, 1.0, 0.1, key="s1_freq")
+    margin = st.sidebar.slider("Kâr Marjı (%)", 0.05, 1.0, 0.20, 0.05, key="s1_margin")
+    churn = st.sidebar.slider("Churn (%)", 0.01, 0.50, 0.05, 0.01, key="s1_churn")
 
-with col1:
-    st.metric("İlk Yatırım (CAC)", f"${cac}", help="Başlangıç maliyeti")
+    # Hesapla
+    months, net_values, payback, final_val, roi = hesapla_senaryo(cac, aov, freq, margin, churn)
+    df = pd.DataFrame({'Ay': months, 'Net Durum': net_values})
 
-with col2:
-    if payback_month:
-        st.metric("Amorti Süresi", f"{payback_month} Ay", delta_color="normal")
-    else:
-        st.metric("Amorti Süresi", "Dönüş Yok (12+)", delta_color="off")
+    # Grafik (Renkli Dolgulu)
+    fig = go.Figure()
+    fig.add_hline(y=0, line_color="black", line_width=1)
 
-with col3:
-    # Düzeltme 3: ROI Göstergesi
-    final_net_value = df.iloc[-1]['Net Durum']
-    roi_percent = (final_net_value / cac) * 100
+    # 0'ın altı (Zarar)
+    fig.add_trace(go.Scatter(
+        x=df['Ay'], y=[val if val <= 0 else 0 for val in df['Net Durum']],
+        mode='lines', line=dict(width=0), fill='tozeroy', fillcolor='rgba(255, 0, 0, 0.2)', name='Zarar',
+        hoverinfo='skip'
+    ))
+    # 0'ın üstü (Kâr)
+    fig.add_trace(go.Scatter(
+        x=df['Ay'], y=[val if val >= 0 else 0 for val in df['Net Durum']],
+        mode='lines', line=dict(width=0), fill='tozeroy', fillcolor='rgba(0, 200, 0, 0.2)', name='Kâr', hoverinfo='skip'
+    ))
+    # Ana Çizgi
+    fig.add_trace(
+        go.Scatter(x=df['Ay'], y=df['Net Durum'], mode='lines+markers', name='Net Akış', line=dict(color='gray')))
 
-    # Delta parametresine direkt sayıyı veriyoruz, Streamlit rengi (Kırmızı/Yeşil) kendi ayarlar.
-    st.metric(
-        label="1. Yıl Sonu Net Kâr/Zarar",
-        value=f"${final_net_value:.1f}",
-        delta=f"{final_net_value:.1f}$"  # Burası negatifse Kırmızı Ok, pozitifse Yeşil Ok olur
-    )
+    # Payback İşaretleyicisi
+    if payback:
+        fig.add_vline(x=payback, line_dash="dash", line_color="green")
+        fig.add_annotation(x=payback, y=0, text=f"Payback: {payback}. Ay", showarrow=True, arrowhead=2, yshift=20,
+                           font=dict(color="green", weight="bold"))
 
-if __name__ == "__main__":
-    st.caption("Not: Grafik kırmızı alandayken yatırım henüz geri dönmemiştir.")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Metrikler
+    col1, col2, col3 = st.columns(3)
+    col1.metric("İlk Yatırım (CAC)", f"${cac}")
+    col2.metric("Amorti Süresi", f"{payback} Ay" if payback else ">12 Ay")
+    col3.metric("1. Yıl Sonu Net Durum", f"${final_val:.1f}", delta=f"${final_val:.1f}")
+
+# ==========================================
+# SAYFA 2: A/B SENARYO KIYASLAMA (Yeni Özellik)
+# ==========================================
+elif page == "A/B Senaryo Kıyaslama":
+    st.title("⚔️ Strateji Savaşı: Senaryo A vs B")
+    st.markdown("İki farklı büyüme stratejisini yan yana kıyaslayın.")
+
+    tab_a, tab_b = st.sidebar.tabs(["Senaryo A (Mevcut)", "Senaryo B (Hedef)"])
+
+    # Senaryo A Girdileri
+    with tab_a:
+        st.caption("Mevcut Durum")
+        cac_a = st.number_input("CAC ($)", 10, 500, 200, key="a_cac")
+        aov_a = st.number_input("AOV ($)", 1, 200, 50, key="a_aov")
+        freq_a = st.slider("Sıklık", 0.1, 5.0, 1.0, key="a_freq")
+        margin_a = st.slider("Kâr Marjı (%)", 0.05, 1.0, 0.20, key="a_margin")
+        churn_a = st.slider("Churn (%)", 0.01, 0.50, 0.05, key="a_churn")
+
+    # Senaryo B Girdileri
+    with tab_b:
+        st.caption("Denemek İstediğin Strateji")
+        cac_b = st.number_input("CAC ($)", 10, 500, 250, key="b_cac")
+        aov_b = st.number_input("AOV ($)", 1, 200, 60, key="b_aov")
+        freq_b = st.slider("Sıklık", 0.1, 5.0, 1.2, key="b_freq")
+        margin_b = st.slider("Kâr Marjı (%)", 0.05, 1.0, 0.25, key="b_margin")
+        churn_b = st.slider("Churn (%)", 0.01, 0.50, 0.04, key="b_churn")
+
+    # Hesaplamalar
+    months, val_a, pay_a, final_a, roi_a = hesapla_senaryo(cac_a, aov_a, freq_a, margin_a, churn_a)
+    months, val_b, pay_b, final_b, roi_b = hesapla_senaryo(cac_b, aov_b, freq_b, margin_b, churn_b)
+
+    # Kıyaslama Grafiği
+    fig = go.Figure()
+    fig.add_hline(y=0, line_color="black", line_width=1)
+
+    fig.add_trace(
+        go.Scatter(x=months, y=val_a, mode='lines+markers', name='Senaryo A', line=dict(color='#1f77b4', width=3)))
+    fig.add_trace(go.Scatter(x=months, y=val_b, mode='lines+markers', name='Senaryo B',
+                             line=dict(color='#ff7f0e', width=3, dash='dash')))
+
+    fig.update_layout(title='Senaryo Karşılaştırması', xaxis_title='Ay', yaxis_title='Net Durum ($)')
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Kıyaslama Kartları
+    st.divider()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Senaryo B: ROI", f"%{roi_b:.1f}", delta=f"%{roi_b - roi_a:.1f} Fark")
+    c2.metric("Senaryo B: Net Kâr", f"${final_b:.1f}", delta=f"${final_b - final_a:.1f} Fark")
+
+    pay_diff = None
+    if pay_a and pay_b:
+        pay_diff = f"{pay_b - pay_a} Ay"
+    c3.metric("Senaryo B: Payback", f"{pay_b} Ay" if pay_b else ">12", delta=pay_diff, delta_color="inverse")
